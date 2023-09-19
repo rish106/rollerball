@@ -55,6 +55,18 @@ constexpr U8 id[64] = {
 #define cw_180_move(p) move_promo(cw_180[getp0(m)], cw_180[getp1(m)], getpromo(m))
 #define color(p) ((PlayerColor)(p & (WHITE | BLACK)))
 
+bool BoardData::operator==(BoardData& other) {
+    BoardData* other_board = &other;
+    bool is_king_equal = (this->b_king == other_board->b_king) && (this->w_king == other_board->w_king);
+    bool is_rook_ws_equal = (this->b_rook_ws == other_board->b_rook_ws) && (this->w_rook_ws == other_board->w_rook_ws);
+    bool is_rook_bs_equal = (this->b_rook_bs == other_board->b_rook_bs) && (this->w_rook_bs == other_board->w_rook_bs);
+    bool is_pawn_ws_equal = (this->b_pawn_ws == other_board->b_pawn_ws) && (this->w_pawn_ws == other_board->w_pawn_ws);
+    bool is_pawn_bs_equal = (this->b_pawn_bs == other_board->b_pawn_bs) && (this->w_pawn_bs == other_board->w_pawn_bs);
+    bool is_bishop_equal = (this->b_bishop == other_board->b_bishop) && (this->w_bishop == other_board->w_bishop);
+    bool is_board_equal = is_king_equal && is_rook_ws_equal && is_rook_bs_equal && is_pawn_bs_equal && is_pawn_ws_equal && is_bishop_equal;
+    return is_board_equal;
+}
+
 std::unordered_set<U16> transform_moves(const std::unordered_set<U16>& moves, const U8 *transform) {
 
     std::unordered_set<U16> rot_moves;

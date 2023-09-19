@@ -65,6 +65,8 @@ struct BoardData {
     U8 last_killed_piece = 0;
     int last_killed_piece_idx = -1;
 
+    bool operator==(BoardData &other);
+
 };
 
 struct Board {
