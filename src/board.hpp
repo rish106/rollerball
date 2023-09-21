@@ -3,7 +3,6 @@
 #include <vector>
 #include <unordered_set>
 #include <stack>
-#include <string>
 
 typedef uint8_t U8;
 typedef uint16_t U16;
@@ -64,8 +63,6 @@ struct BoardData {
     PlayerColor player_to_play = WHITE;
     U8 last_killed_piece = 0;
     int last_killed_piece_idx = -1;
-
-    bool operator==(BoardData &other);
 
 };
 
