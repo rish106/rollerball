@@ -39,14 +39,15 @@ struct Evaluation {
     int check           = 0;
     int develop         = 0;
     int king_distance   = 0;
+    int depth           = 0;
     int total           = 0;
 
     bool operator>(Evaluation& other_eval) {
-        return total > other_eval.total;
+        return ((total > other_eval.total) || (total == other_eval.total && depth < other_eval.depth));
     }
 
-    static bool compare(const Evaluation& x, const Evaluation& y) {
-        return x.total < y.total;
+    bool operator<(Evaluation& other_eval) {
+        return ((total < other_eval.total) || (total == other_eval.total && depth < other_eval.depth));
     }
 
     void reset() {
@@ -71,6 +72,7 @@ struct Evaluation {
         cout << "piece weight   " << piece_weight << '\n';
         cout << "promo          " << promo << '\n';
         cout << "check          " << check << '\n';
+        cout << "depth          " << depth << '\n';
         cout << "develop        " << develop << '\n';
         cout << "king distance  " << king_distance << '\n';
         cout << "total          " << total << '\n';
@@ -296,6 +298,12 @@ bool is_equal(Board* b1, Board* b2) {
     return is_equal;
 }
 
+bool is_better_eval(Evaluation& eval1, Evaluation& eval2, bool maximizing_player) {
+    bool res = (maximizing_player ? eval1.total > eval2.total : eval1.total < eval2.total);
+    res = res || (eval1.total == eval2.total && eval1.depth < eval2.depth);
+    return res;
+}
+
 
 Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board*> &visited, int alpha, int beta) {
     if (depth == 0) {
@@ -326,13 +334,15 @@ Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board
         visited.push_back(new_board);
         nodes_visited++;
         Evaluation eval = minimax(*new_board, depth - 1, !maximizing_player, visited, alpha, beta);
+        eval.depth++;
         free(new_board);
         visited.pop_back();
+        if (is_better_eval(eval, best_eval, maximizing_player)) {
+            best_eval = eval;
+        }
         if (maximizing_player) {
-            best_eval = max(best_eval, eval, Evaluation::compare);
             alpha = max(alpha, best_eval.total);
         } else {
-            best_eval = min(best_eval, eval, Evaluation::compare);
             beta = min(beta, best_eval.total);
         }
         if (alpha >= beta) {
@@ -369,9 +379,10 @@ void Engine::find_best_move(const Board& b) {
         visited.push_back(new_board);
         nodes_visited++;
         Evaluation eval = minimax(*new_board, SEARCH_DEPTH - 1, false, visited, alpha, beta);
+        eval.depth++;
         visited.pop_back();
         free(new_board);
-        if (eval > best_eval || best_eval.total == INT_MIN) {
+        if (is_better_eval(eval, best_eval, true) || best_eval.total == INT_MIN) {
             best_eval = eval;
             best_move = move;
             alpha = eval.total;
