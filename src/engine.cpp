@@ -10,8 +10,9 @@ using namespace std;
 #include "board.hpp"
 #include "engine.hpp"
 
-const int MIN_SEARCH_DEPTH = 4;
-const int MAX_SEARCH_DEPTH = 8;
+int MIN_SEARCH_DEPTH = 2;
+int MAX_SEARCH_DEPTH = 6;
+const int QUIESCENCE_DEPTH = 2;
 
 const int PAWN_WEIGHT = 150;
 const int ROOK_WEIGHT = 600;
@@ -20,6 +21,7 @@ const int KING_WEIGHT = 1500;
 const int CHECK_WEIGHT = 99;
 const int STALEMATE_WEIGHT = 1000;
 const int REPETITION_WEIGHT = 1000;
+const int RING_WEIGHT = 20;
 
 const int ATTACKING_FACTOR = 6;
 const int DEFENDING_FACTOR = 4;
@@ -41,30 +43,39 @@ struct Evaluation {
     int check           = 0;
     int king_distance   = 0;
     int depth           = 0;
+    int attack          = 0;
+    int ring_weight     = 0;
     int total           = 0;
+    vector<U16> moves;
 
     void reset() {
         piece_weight    = 0;
         promo           = 0;
+        attack          = 0;
         check           = 0;
         king_distance   = 0;
+        ring_weight     = 0;
         total           = 0;
     }
 
     void update_total() {
         total = 0;
         total += piece_weight;
+        total += attack;
         total += promo;
         total += check;
         total += king_distance;
+        total += ring_weight;
     }
 
     void print() {
         cout << "piece weight   " << piece_weight << '\n';
         cout << "promo          " << promo << '\n';
+        cout << "attack         " << attack << '\n';
         cout << "check          " << check << '\n';
         cout << "depth          " << depth << '\n';
         cout << "king distance  " << king_distance << '\n';
+        cout << "ring weight    " << ring_weight << '\n';
         cout << "total          " << total << '\n';
     }
 };
@@ -124,7 +135,7 @@ int get_distance(U8 initial_pos, U8 final_pos) {
             distance_y = abs(initial_y - gety(special_point));
             distance += max(distance_x, distance_y);
         } else {
-            distance += final_coordinate - initial_coordinate;
+            distance += abs(final_coordinate - initial_coordinate);
         }
     } else {
         U8 quad_diff = (final_quad > initial_quad ? final_quad - initial_quad : 4 + final_quad - initial_quad);
@@ -142,6 +153,26 @@ int get_distance(U8 initial_pos, U8 final_pos) {
     return distance;
 }
 
+int get_rook_distance(U8 rook_pos, U8 final_pos) {
+    int rook_quad = quadrants[rook_pos];
+    int final_quad = quadrants[final_pos];
+    int distance;
+    if (final_quad == rook_quad) {
+        int manhattan_distance = abs(getx(rook_pos) - getx(final_pos)) + abs(gety(rook_pos) - gety(final_pos));
+        U8 rook_coordinate = (rook_quad % 2 == 0 ? getx(rook_pos) : gety(rook_pos));
+        U8 final_coordinate = (rook_quad % 2 == 0 ? getx(final_pos) : gety(final_pos));
+        if ((((rook_quad == 1 || rook_quad == 2) && rook_coordinate >= final_coordinate) || ((rook_quad == 0 || rook_quad == 3) && rook_coordinate <= final_coordinate)) || manhattan_distance == 1) {
+            distance = 1;
+        } else {
+            distance = 3;
+        }
+    } else {
+        int quad_diff = (final_quad > rook_quad ? final_quad - rook_quad : 4 + final_quad - rook_quad);
+        distance = max(1, quad_diff);
+    }
+    return distance;
+}
+
 Evaluation eval(Board& b) {
 
     U8 white_pieces[6] = {b.data.w_rook_ws, b.data.w_rook_bs, b.data.w_king, b.data.w_bishop, b.data.w_pawn_ws, b.data.w_pawn_bs};
@@ -153,27 +184,59 @@ Evaluation eval(Board& b) {
     U8 player_promo = (curr_player == WHITE ? pos(4, 5) : pos(2, 0));
     U8 opponent_promo = (curr_player == WHITE ? pos(2, 0) : pos(4, 5));
 
-    U8 player_king_x = getx(player_pieces[2]);
-    U8 player_king_y = gety(player_pieces[2]);
-    U8 opponent_king_x = getx(opponent_pieces[2]);
-    U8 opponent_king_y = gety(opponent_pieces[2]);
+    U8 player_king = player_pieces[2];
+    U8 opponent_king = opponent_pieces[2];
+
+    unordered_set<U16> player_moves, opponent_moves;
+    (curr_player == b.data.player_to_play ? player_moves : opponent_moves) = b.get_legal_moves();
+    flip_player(b);
+    (curr_player == b.data.player_to_play ? player_moves : opponent_moves) = b.get_legal_moves();
+    flip_player(b);
 
     Evaluation score;
 
     for (int i = 4; i < 6; i++) {
-        if (b.data.board_0[player_pieces[i]] & ROOK) {
+        if (player_pieces[i] == DEAD) {
+
+        } else if (b.data.board_0[player_pieces[i]] & ROOK) {
             PLAYER_WEIGHTS[i] = ROOK_WEIGHT;
         } else if (b.data.board_0[player_pieces[i]] & BISHOP) {
             PLAYER_WEIGHTS[i] = BISHOP_WEIGHT;
         } else {
             PLAYER_WEIGHTS[i] = PAWN_WEIGHT;
+            int piece_y = gety(player_pieces[i]);
+            int distance_y = min(abs(piece_y - gety(player_promo)), abs(piece_y - gety(player_promo) - 1));
+            int pawn_distance = get_distance(player_pieces[i], player_promo);
+            int promo_score;
+            if (distance_y <= 1) {
+                promo_score = 250 / (1 + pawn_distance);
+            } else if (distance_y <= 3){
+                promo_score = 180 / (1 + pawn_distance);
+            } else {
+                promo_score = 150 / (1 + pawn_distance);
+            }
+            PLAYER_WEIGHTS[i] += promo_score;
         }
-        if (b.data.board_0[opponent_pieces[i]] & ROOK) {
+        if (opponent_pieces[i] == DEAD) {
+
+        } else if (b.data.board_0[opponent_pieces[i]] & ROOK) {
             OPPONENT_WEIGHTS[i] = ROOK_WEIGHT;
         } else if (b.data.board_0[opponent_pieces[i]] & BISHOP) {
             OPPONENT_WEIGHTS[i] = BISHOP_WEIGHT;
         } else {
             OPPONENT_WEIGHTS[i] = PAWN_WEIGHT;
+            int piece_y = gety(opponent_pieces[i]);
+            int distance_y = min(abs(piece_y - gety(opponent_promo)), abs(piece_y - gety(opponent_promo) - 1));
+            int pawn_distance = get_distance(opponent_pieces[i], opponent_promo);
+            int promo_score;
+            if (distance_y <= 1) {
+                promo_score = 250 / (1 + pawn_distance);
+            } else if (distance_y <= 3){
+                promo_score = 180 / (1 + pawn_distance);
+            } else {
+                promo_score = 150 / (1 + pawn_distance);
+            }
+            OPPONENT_WEIGHTS[i] += promo_score;
         }
     }
 
@@ -184,6 +247,25 @@ Evaluation eval(Board& b) {
             }
             if (opponent_pieces[i] != DEAD) {
                 score.piece_weight -= OPPONENT_WEIGHTS[i];
+            }
+        }
+    };
+
+    auto add_attack_score = [&]() {
+        for (auto move : player_moves) {
+            U8 final_pos = getp1(move);
+            for (int i = 0; i < 6; i++) {
+                if (final_pos == opponent_pieces[i] && i != 2) {
+                    score.attack += PLAYER_WEIGHTS[i] / ATTACKING_FACTOR;
+                }
+            }
+        }
+        for (auto move : opponent_moves) {
+            U8 final_pos = getp1(move);
+            for (int i = 0; i < 6; i++) {
+                if (final_pos == player_pieces[i] && i != 2) {
+                    score.attack -= OPPONENT_WEIGHTS[i] / DEFENDING_FACTOR;
+                }
             }
         }
     };
@@ -214,17 +296,17 @@ Evaluation eval(Board& b) {
             distance_y = min(abs(piece_y - promo_pos_y), abs(piece_y - promo_pos_y - 1));
             pawn_distance = get_distance(pieces[i], promo_pos);
             if (distance_y <= 1) {
-                promo_score = 250 / (1 + pawn_distance);
-            } else if (distance_y <= 3){
                 promo_score = 120 / (1 + pawn_distance);
-            } else {
+            } else if (distance_y <= 3){
                 promo_score = 100 / (1 + pawn_distance);
+            } else {
+                promo_score = 50 / (1 + pawn_distance);
             }
             min_promo = min(promo_score, min_promo);
             max_promo = max(promo_score, max_promo);
         }
         if (min_promo != INT_MAX) {
-            promo_score = (max_promo + 2 * min_promo) / 3;
+            promo_score = (max_promo + 10 * min_promo) / 11;
         }
         return promo_score;
     };
@@ -235,33 +317,62 @@ Evaluation eval(Board& b) {
     };
 
     auto add_king_distance_score = [&]() {
-        U8 piece_x, piece_y, distance_x, distance_y;
+        int distance;
         for (int i = 0; i < 6; i++) {
             if (player_pieces[i] == DEAD || i == 2) {
                 continue;
             }
-            piece_x = getx(player_pieces[i]);
-            piece_y = gety(player_pieces[i]);
-            distance_x = abs(opponent_king_x - piece_x);
-            distance_y = abs(opponent_king_y - piece_y);
-            score.king_distance += PLAYER_WEIGHTS[i] / (20 + 10 * (distance_y + distance_x));
+            if (i <= 1) {
+                distance = get_rook_distance(player_pieces[i], opponent_king);
+                score.king_distance += PLAYER_WEIGHTS[i] / (40 + 10 * distance);
+            } else {
+                distance = get_distance(player_pieces[i], opponent_king);
+                score.king_distance += PLAYER_WEIGHTS[i] / (20 + 10 * distance);
+            }
         }
         for (int i = 0; i < 6; i++) {
             if (opponent_pieces[i] == DEAD || i == 2) {
                 continue;
             }
-            piece_x = getx(opponent_pieces[i]);
-            piece_y = gety(opponent_pieces[i]);
-            distance_x = abs(player_king_x - piece_x);
-            distance_y = abs(player_king_y - piece_y);
-            score.king_distance -= OPPONENT_WEIGHTS[i] / (20 + 10 * (distance_x + distance_y));
+            if (i <= 1) {
+                distance = get_rook_distance(opponent_pieces[i], player_king);
+                score.king_distance -= OPPONENT_WEIGHTS[i] / (40 + 10 * distance);
+            } else {
+                distance = get_distance(opponent_pieces[i], player_king);
+                score.king_distance -= OPPONENT_WEIGHTS[i] / (20 + 10 * distance);
+            }
+        }
+    };
+
+    auto add_ring_score = [&]() {
+        for (int i = 0; i < 2; i++) {
+            if (player_pieces[i] == DEAD) {
+                continue;
+            }
+            int piece_x = getx(player_pieces[i]);
+            int piece_y = gety(player_pieces[i]);
+            if (min(piece_x, 6 - piece_x) == 0 || min(piece_y, 6 - piece_y) == 0) {
+                score.ring_weight += RING_WEIGHT;
+            }
+        }
+        for (int i = 0; i < 2; i++) {
+            if (opponent_pieces[i] == DEAD) {
+                continue;
+            }
+            int piece_x = getx(opponent_pieces[i]);
+            int piece_y = gety(opponent_pieces[i]);
+            if (min(piece_x, 6 - piece_x) == 0 || min(piece_y, 6 - piece_y) == 0) {
+                score.ring_weight -= RING_WEIGHT;
+            }
         }
     };
 
     add_piece_score();
+    add_attack_score();
     add_promo_score();
     add_king_distance_score();
     subtract_check_score();
+    // add_ring_score();
 
     score.update_total();
 
@@ -319,6 +430,7 @@ Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board
         nodes_visited++;
         Evaluation eval = minimax(*new_board, depth - 1, !maximizing_player, visited, alpha, beta, search);
         eval.depth++;
+        eval.moves.push_back(move);
         free(new_board);
         visited.pop_back();
         if (is_better_eval(eval, best_eval, maximizing_player)) {
@@ -345,7 +457,7 @@ void Engine::find_best_move(const Board& b) {
     }
     Evaluation best_eval;
     best_eval.total = INT_MIN;
-    U16 best_move = 0;
+    best_eval.depth = MAX_SEARCH_DEPTH;
     auto player_moveset = b.get_legal_moves();
     this->best_move = 0;
     vector<Board*> visited;
@@ -362,14 +474,20 @@ void Engine::find_best_move(const Board& b) {
             Evaluation eval = minimax(*new_board, depth, false, visited, alpha, beta, this->search);
             eval.depth++;
             visited.pop_back();
-            free(new_board);
-            if (is_better_eval(eval, best_eval, true) || best_eval.total == INT_MIN) {
-                best_eval = eval;
-                best_move = move;
-                alpha = eval.total;
+            if (is_better_eval(eval, best_eval, true)) {
+                for (int i = eval.moves.size() - 1; i >= 0; i--) {
+                    new_board->do_move(eval.moves[i]);
+                }
+                nodes_visited++;
+                Evaluation new_eval = minimax(*new_board, QUIESCENCE_DEPTH, (eval.depth % 2 == 0), visited, INT_MIN, INT_MAX, this->search);
+                if (new_eval.total - eval.total >= 0 || best_eval.total == INT_MIN) {
+                    best_eval = eval;
+                    this->best_move = move;
+                    alpha = eval.total;
+                }
             }
+            free(new_board);
         }
-        this->best_move = best_move;
     }
     auto end_time = chrono::high_resolution_clock::now();
     Board* new_board = b.copy();
