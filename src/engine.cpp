@@ -10,14 +10,16 @@ using namespace std;
 #include "board.hpp"
 #include "engine.hpp"
 
-const int SEARCH_DEPTH = 5;
+const int MIN_SEARCH_DEPTH = 4;
+const int MAX_SEARCH_DEPTH = 8;
 
 const int PAWN_WEIGHT = 150;
 const int ROOK_WEIGHT = 600;
 const int BISHOP_WEIGHT = 400;
 const int KING_WEIGHT = 1500;
 const int CHECK_WEIGHT = 99;
-const int STALEMATE_WEIGHT = 2000;
+const int STALEMATE_WEIGHT = 1000;
+const int REPETITION_WEIGHT = 1000;
 
 const int ATTACKING_FACTOR = 6;
 const int DEFENDING_FACTOR = 4;
@@ -37,24 +39,14 @@ struct Evaluation {
     int piece_weight    = 0;
     int promo           = 0;
     int check           = 0;
-    int develop         = 0;
     int king_distance   = 0;
     int depth           = 0;
     int total           = 0;
-
-    bool operator>(Evaluation& other_eval) {
-        return ((total > other_eval.total) || (total == other_eval.total && depth < other_eval.depth));
-    }
-
-    bool operator<(Evaluation& other_eval) {
-        return ((total < other_eval.total) || (total == other_eval.total && depth < other_eval.depth));
-    }
 
     void reset() {
         piece_weight    = 0;
         promo           = 0;
         check           = 0;
-        develop         = 0;
         king_distance   = 0;
         total           = 0;
     }
@@ -64,7 +56,6 @@ struct Evaluation {
         total += piece_weight;
         total += promo;
         total += check;
-        total += develop;
         total += king_distance;
     }
 
@@ -73,7 +64,6 @@ struct Evaluation {
         cout << "promo          " << promo << '\n';
         cout << "check          " << check << '\n';
         cout << "depth          " << depth << '\n';
-        cout << "develop        " << develop << '\n';
         cout << "king distance  " << king_distance << '\n';
         cout << "total          " << total << '\n';
     }
@@ -122,7 +112,7 @@ int get_distance(U8 initial_pos, U8 final_pos) {
     if (initial_quad == final_quad) {
         U8 initial_coordinate = (initial_quad % 2 == 0 ? initial_x : initial_y);
         U8 final_coordinate = (initial_quad % 2 == 0 ? final_x : final_y);
-        if ((((initial_quad == 1 || initial_quad == 2) && initial_coordinate >= final_coordinate) || (initial_quad == 0 || initial_quad == 3) && initial_coordinate <= final_coordinate)) {
+        if ((((initial_quad == 1 || initial_quad == 2) && initial_coordinate >= final_coordinate) || ((initial_quad == 0 || initial_quad == 3) && initial_coordinate <= final_coordinate))) {
             distance += 12;
             U8 prev_quad = (final_quad + 3) % 4;
             U8 special_point = quad_points[prev_quad];
@@ -162,25 +152,13 @@ Evaluation eval(Board& b) {
 
     U8 player_promo = (curr_player == WHITE ? pos(4, 5) : pos(2, 0));
     U8 opponent_promo = (curr_player == WHITE ? pos(2, 0) : pos(4, 5));
-    int player_promo_x = getx(player_promo);
-    int player_promo_y = gety(player_promo);
-    int opponent_promo_x = (curr_player == WHITE ? 2 : 4);
-    int opponent_promo_y = (curr_player == WHITE ? 0 : 5);
 
-    U8 player_develop_square = (curr_player == WHITE ? pos(1, 5) : pos(5, 1));
-    // U8 opponent_develop_square = (curr_player == WHITE ? pos(5, 1) : pos(1, 5));
-    int player_king_x = getx(player_pieces[2]);
-    int player_king_y = gety(player_pieces[2]);
-    int opponent_king_x = getx(opponent_pieces[2]);
-    int opponent_king_y = gety(opponent_pieces[2]);
+    U8 player_king_x = getx(player_pieces[2]);
+    U8 player_king_y = gety(player_pieces[2]);
+    U8 opponent_king_x = getx(opponent_pieces[2]);
+    U8 opponent_king_y = gety(opponent_pieces[2]);
 
     Evaluation score;
-
-    // unordered_set<U16> player_moves, opponent_moves;
-    // (curr_player == b.data.player_to_play ? player_moves : opponent_moves) = b.get_legal_moves();
-    // flip_player(b);
-    // (curr_player == b.data.player_to_play ? player_moves : opponent_moves) = b.get_legal_moves();
-    // flip_player(b);
 
     for (int i = 4; i < 6; i++) {
         if (b.data.board_0[player_pieces[i]] & ROOK) {
@@ -257,24 +235,27 @@ Evaluation eval(Board& b) {
     };
 
     auto add_king_distance_score = [&]() {
+        U8 piece_x, piece_y, distance_x, distance_y;
         for (int i = 0; i < 6; i++) {
             if (player_pieces[i] == DEAD || i == 2) {
                 continue;
             }
-            int player_piece_x = getx(player_pieces[i]);
-            int player_piece_y = gety(player_pieces[i]);
-            int distance_x = abs(opponent_king_x - player_piece_x);
-            int distance_y = abs(opponent_king_y - player_piece_y);
+            piece_x = getx(player_pieces[i]);
+            piece_y = gety(player_pieces[i]);
+            distance_x = abs(opponent_king_x - piece_x);
+            distance_y = abs(opponent_king_y - piece_y);
             score.king_distance += PLAYER_WEIGHTS[i] / (20 + 10 * (distance_y + distance_x));
         }
-        // for (int i = 0; i < 6; i++) {
-        //     if (opponent_pieces[i] == DEAD) {
-        //         continue;
-        //     }
-        //     int opponent_piece_x = getx(opponent_pieces[i]);
-        //     int opponent_piece_y = gety(opponent_pieces[i]);
-        //     score -= WEIGHTS[i] / (20 + 5 * (abs(player_king_y - opponent_piece_y) + abs(player_king_x - opponent_piece_x)));
-        // }
+        for (int i = 0; i < 6; i++) {
+            if (opponent_pieces[i] == DEAD || i == 2) {
+                continue;
+            }
+            piece_x = getx(opponent_pieces[i]);
+            piece_y = gety(opponent_pieces[i]);
+            distance_x = abs(player_king_x - piece_x);
+            distance_y = abs(player_king_y - piece_y);
+            score.king_distance -= OPPONENT_WEIGHTS[i] / (20 + 10 * (distance_x + distance_y));
+        }
     };
 
     add_piece_score();
@@ -304,20 +285,23 @@ bool is_better_eval(Evaluation& eval1, Evaluation& eval2, bool maximizing_player
     return res;
 }
 
-
-Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board*> &visited, int alpha, int beta) {
+Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board*> &visited, int alpha, int beta, atomic<bool>& search) {
+    Evaluation best_eval;
+    if (previous_board_occurences[board_to_str(board.data.board_0)] == 2) {
+        best_eval.total = (maximizing_player ? 1 : -1) * REPETITION_WEIGHT;
+        return best_eval;
+    }
     if (depth == 0) {
         return eval(board);
     }
-
-    Evaluation best_eval;
     best_eval.total = (maximizing_player ? INT_MIN : INT_MAX);
     auto player_moveset = board.get_legal_moves();
     if (player_moveset.empty() && !board.in_check()) {
         best_eval.total = (maximizing_player ? 1 : -1) * STALEMATE_WEIGHT;
         return best_eval;
     }
-    for (auto move : player_moveset) {
+    for (auto iter = player_moveset.begin(); iter != player_moveset.end() && search; iter++) {
+        auto move = *iter;
         Board* new_board = board.copy();
         new_board->do_move(move);
         bool is_visited_board = false;
@@ -333,7 +317,7 @@ Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board
         }
         visited.push_back(new_board);
         nodes_visited++;
-        Evaluation eval = minimax(*new_board, depth - 1, !maximizing_player, visited, alpha, beta);
+        Evaluation eval = minimax(*new_board, depth - 1, !maximizing_player, visited, alpha, beta, search);
         eval.depth++;
         free(new_board);
         visited.pop_back();
@@ -354,7 +338,7 @@ Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board
 
 void Engine::find_best_move(const Board& b) {
     auto start_time = chrono::high_resolution_clock::now();
-    previous_board_occurences[all_boards_to_str(b)]++;
+    previous_board_occurences[board_to_str(b.data.board_0)]++;
     if (curr_player == -1) {
         curr_player = b.data.player_to_play;
         init_quadrant_map();
@@ -364,38 +348,35 @@ void Engine::find_best_move(const Board& b) {
     U16 best_move = 0;
     auto player_moveset = b.get_legal_moves();
     this->best_move = 0;
-    // std::cout << all_boards_to_str(b) << std::endl;
-    // for (auto m : moveset) {
-    //     std::cout << move_to_str(m) << " ";
-    // }
-    // std::cout << std::endl;
     vector<Board*> visited;
     nodes_visited = 0;
-    int alpha = INT_MIN;
-    int beta = INT_MAX;
-    for (auto move : player_moveset) {
-        Board* new_board = b.copy();
-        new_board->do_move(move);
-        visited.push_back(new_board);
-        nodes_visited++;
-        Evaluation eval = minimax(*new_board, SEARCH_DEPTH - 1, false, visited, alpha, beta);
-        eval.depth++;
-        visited.pop_back();
-        free(new_board);
-        if (is_better_eval(eval, best_eval, true) || best_eval.total == INT_MIN) {
-            best_eval = eval;
-            best_move = move;
-            alpha = eval.total;
+    for (int depth = MIN_SEARCH_DEPTH - 1; depth < MAX_SEARCH_DEPTH && this->search; depth++) {
+        int alpha = INT_MIN;
+        int beta = INT_MAX;
+        for (auto iter = player_moveset.begin(); iter != player_moveset.end() && this->search; iter++) {
+            auto move = *iter;
+            Board* new_board = b.copy();
+            new_board->do_move(move);
+            visited.push_back(new_board);
+            nodes_visited++;
+            Evaluation eval = minimax(*new_board, depth, false, visited, alpha, beta, this->search);
+            eval.depth++;
+            visited.pop_back();
+            free(new_board);
+            if (is_better_eval(eval, best_eval, true) || best_eval.total == INT_MIN) {
+                best_eval = eval;
+                best_move = move;
+                alpha = eval.total;
+            }
         }
+        this->best_move = best_move;
     }
-    this->best_move = best_move;
     auto end_time = chrono::high_resolution_clock::now();
     Board* new_board = b.copy();
     new_board->do_move(best_move);
-    previous_board_occurences[all_boards_to_str(*new_board)]++;
+    previous_board_occurences[board_to_str(new_board->data.board_0)]++;
     free(new_board);
     best_eval.print();
-    cout << get_distance(pos(2, 1), pos(4, 5));
-    cout << "time taken to find best move: " << chrono::duration_cast<chrono::duration<double>>(end_time - start_time).count() << " seconds" << endl;
+    cout << "found best move in " << chrono::duration_cast<chrono::duration<double>>(end_time - start_time).count() << " seconds" << endl;
     cout << "nodes visited " << nodes_visited << endl;
 }
